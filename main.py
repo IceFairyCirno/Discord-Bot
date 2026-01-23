@@ -6,12 +6,13 @@ import os
 import json
 import yt_dlp
 import asyncio
+import random
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 SERVER_ID = int(os.getenv('SERVER_ID'))
 GUILD_ID = discord.Object(id=SERVER_ID)
-queue = []
+lst = []
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
@@ -39,9 +40,6 @@ class Client(commands.Bot):
             return
         if message.content in ['hello', 'hi', 'hey', "Hello", "Hi", "Hey"]:
             await message.channel.send(f'Hi there {(message.author).mention}!')
-        if message.content in ['nigga', 'nigger', "Nigger", "Nigga"]:
-            await message.channel.send(f'https://tenor.com/view/plane-angry-man-kick-of-plane-gif-21332726')
-
         await self.process_commands(message)
 
     async def on_reaction_add(self, reaction, user):
@@ -62,12 +60,9 @@ class Client(commands.Bot):
             embed.set_thumbnail(url=member.avatar.url if member.avatar else None)
             await Greeting_Channel.send(embed=embed)
         else:
-            return
-        
+            await member.guild.system_channel.send(f"Welcome to the server, {member.mention}!")
 
-
-
-intents = discord. Intents.default()
+intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.voice_states = True
@@ -116,6 +111,8 @@ async def play(interaction: discord.Interaction, url: str):
     # Get the voice client
     voice = interaction.guild.voice_client
 
+    if voice.is_playing():
+        voice.stop()
 
     # Defer the response to allow time for processing
     await interaction.response.defer()
@@ -137,7 +134,9 @@ async def play(interaction: discord.Interaction, url: str):
     )
     
     # Create and send embed
+    global lst
     embed = discord.Embed(title="Now Playing:", description=info.get('title', 'Unknown Title'), color=discord.Color.green())
+    embed.add_field(name="Up Next:", value=lst[0] if lst else "None", inline=False)
     if thumbnail_url:
         embed.set_thumbnail(url=thumbnail_url)
     
@@ -145,79 +144,92 @@ async def play(interaction: discord.Interaction, url: str):
     voice.play(source)
     await interaction.followup.send(embed=embed)
 
+
 @client.tree.command(name="pause", description="Pause current music", guild=GUILD_ID)
 async def pause(interaction: discord.Interaction):
+
+    # Check if the bot is connected to a voice channel
     if not interaction.guild.voice_client:
         await interaction.response.send_message("Not playing anything.", ephemeral=True)
         return
 
+    # Get the voice client
     voice = interaction.guild.voice_client
 
+    # Pause the music if it's playing
     if voice.is_playing():
         voice.pause()
         await interaction.response.send_message("Paused")
+    # Check if the music is already paused
     elif voice.is_paused():
         await interaction.response.send_message("Already paused.", ephemeral=True)
+    # If nothing is playing
     else:
         await interaction.response.send_message("Nothing is playing.", ephemeral=True)
 
 @client.tree.command(name="resume", description="Resume paused music", guild=GUILD_ID)
 async def resume(interaction: discord.Interaction):
+
+    # Check if the bot is connected to a voice channel
     if not interaction.guild.voice_client:
         await interaction.response.send_message("Not in voice channel.", ephemeral=True)
         return
 
+    # Get the voice client
     voice = interaction.guild.voice_client
 
+    # Resume the music if it's paused
     if voice.is_paused():
         voice.resume()
         await interaction.response.send_message("Resumed")
+    # If the music is already playing
     else:
         await interaction.response.send_message("Not paused.", ephemeral=True)
 
-
 @client.tree.command(name="queue", description="Add the next song to the queue", guild=GUILD_ID)
 async def queue(interaction: discord.Interaction, url: str):
-    if not interaction.guild.voice_client:
-        await interaction.response.send_message("Not playing anything.", ephemeral=True)
-        return
-    else:
-        queue.append(url)
-        await interaction.response.send_message(f"Added to queue: {url}")
+    # Add the URL to the queue
+    global lst
+    lst.append(url)
+    await interaction.response.send_message(f"Added to queue: {url}")
 
 @client.tree.command(name="skip", description="Skip current music", guild=GUILD_ID)
 async def skip(interaction: discord.Interaction):
+
+    # Check if the bot is connected to a voice channel
     if not interaction.guild.voice_client:
         await interaction.response.send_message("Not playing anything.", ephemeral=True)
-        return
+
+    voice = interaction.guild.voice_client
+
+    # If there are songs in the queue, play the next one
+    global lst
+    if lst:
+        next_url = lst.pop(0)
+        loop = asyncio.get_event_loop()
+        info = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YDL_OPTIONS).extract_info(next_url, download=False))
+        audio_url = info['url']
+        source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS)
+
+        thumbnail_url = (
+            f"https://img.youtube.com/vi/{info['id']}/maxresdefault.jpg" or
+            f"https://img.youtube.com/vi/{info['id']}/sddefault.jpg" or
+            f"https://img.youtube.com/vi/{info['id']}/hqdefault.jpg" or
+            info.get('thumbnail')
+        )
+
+        embed = discord.Embed(title="Now Playing:", description=info.get('title', 'Unknown Title'), color=discord.Color.green())
+        embed.add_field(name="Up Next:", value=lst[0] if lst else "None", inline=False)
+        if thumbnail_url:
+            embed.set_thumbnail(url=thumbnail_url)
+
+        voice.stop()
+        voice.play(source)
+        await interaction.response.send_message(embed=embed)
+    # If the queue is empty, just stop the current song
     else:
-        voice = interaction.guild.voice_client
-        if voice.is_playing():
-            voice.stop()
-            if queue:
-                next_url = queue.pop(0)
-                loop = asyncio.get_event_loop()
-                info = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(YDL_OPTIONS).extract_info(next_url, download=False))
-                audio_url = info['url']
-                source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS)
-                voice.play(source)
-                thumbnail_url = (
-                    f"https://img.youtube.com/vi/{info['id']}/maxresdefault.jpg" or
-                    f"https://img.youtube.com/vi/{info['id']}/sddefault.jpg" or
-                    f"https://img.youtube.com/vi/{info['id']}/hqdefault.jpg" or
-                    info.get('thumbnail')
-                )
-                if thumbnail_url:
-                    embed = discord.Embed(title="Now Playing:", description=info.get('title', 'Unknown Title'), color=discord.Color.green())
-                    embed.set_thumbnail(url=thumbnail_url)
-                    await interaction.followup.send(embed=embed)
-                else:
-                    await interaction.followup.send(f"Now playing: {info.get('title', next_url)}")
-            await interaction.response.send_message("Skipped current song.")
-        else:
-            await interaction.response.send_message("Nothing is playing.", ephemeral=True)
-
-
+        voice.stop()
+        await interaction.response.send_message("Skipped the current song.")
 
 if __name__ == "__main__":
     client.run(TOKEN)
